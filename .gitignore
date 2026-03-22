@@ -1,5 +1,4 @@
 .env
-data/
 logs/
 cache/
 __pycache__/
