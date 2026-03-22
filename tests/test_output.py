@@ -96,7 +96,7 @@ class TestWriteMarkdown(unittest.TestCase):
             path = Path(tmpdir) / "test.md"
             write_markdown(records, path)
             content = path.read_text(encoding="utf-8")
-            self.assertIn("## Music", content)
+            self.assertIn("音乐 (Music)", content)
             self.assertIn("Test", content)
             self.assertIn("1.0K", content)
 

@@ -9,7 +9,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from config import load_config
-from fetcher import fetch_categories, fetch_trending_videos, QuotaExceededError
+from fetcher import (
+    fetch_categories, fetch_trending_videos, fetch_custom_category_videos,
+    parse_custom_categories, QuotaExceededError,
+)
 from aggregator import aggregate, deduplicate
 from output import write_csv, write_markdown, update_latest
 from cleaner import clean_old_files
@@ -92,6 +95,31 @@ def main() -> None:
         records = aggregate(items, cat["id"], cat["title"], config.region_code)
         all_records.extend(records)
 
+    # 5b. Fetch custom categories (keyword-based search)
+    custom_cats = parse_custom_categories(config.custom_categories)
+    for ccat in custom_cats:
+        if quota_hit:
+            skipped_categories.append(ccat["name"])
+            continue
+
+        logger.info("Fetching custom category: %s", ccat["name"])
+        try:
+            items = fetch_custom_category_videos(config, ccat["keywords"])
+        except QuotaExceededError:
+            logger.error("Quota exceeded at custom category %s, stopping", ccat["name"])
+            errors.append(f"Quota exceeded at custom category {ccat['name']}")
+            quota_hit = True
+            skipped_categories.append(ccat["name"])
+            continue
+
+        if not items:
+            logger.warning("No videos for custom category %s", ccat["name"])
+            skipped_categories.append(ccat["name"])
+            continue
+
+        records = aggregate(items, f"custom_{ccat['name']}", ccat["name"], config.region_code)
+        all_records.extend(records)
+
     # Deduplicate across categories
     all_records = deduplicate(all_records)
     logger.info("Total records after dedup: %d", len(all_records))
@@ -100,9 +128,12 @@ def main() -> None:
     snapshot_path = Path(config.output_dir) / "snapshots" / f"{date_str}.csv"
     report_path = Path(config.output_dir) / "reports" / f"{date_str}.md"
 
+    # Custom categories come first in report, in their defined order
+    priority_categories = [c["name"] for c in custom_cats]
+
     if all_records:
         write_csv(all_records, snapshot_path)
-        write_markdown(all_records, report_path, config.display_timezone)
+        write_markdown(all_records, report_path, config.display_timezone, priority_categories)
 
         # 8. Update latest.csv
         update_latest(snapshot_path, config.output_dir)

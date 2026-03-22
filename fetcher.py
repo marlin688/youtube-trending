@@ -176,3 +176,92 @@ def fetch_trending_videos(
     items = response.get("items", [])
     logger.info("Fetched %d videos for category %s", len(items), category_id)
     return items
+
+
+def parse_custom_categories(raw: str) -> list[dict[str, str]]:
+    """Parse CUSTOM_CATEGORIES config string into structured list.
+
+    Format: "Name1:kw1|kw2|kw3;Name2:kw4|kw5"
+    Returns: [{"name": "Name1", "keywords": "kw1|kw2|kw3"}, ...]
+    """
+    if not raw.strip():
+        return []
+    result = []
+    for entry in raw.split(";"):
+        entry = entry.strip()
+        if ":" not in entry:
+            continue
+        name, keywords = entry.split(":", 1)
+        name, keywords = name.strip(), keywords.strip()
+        if name and keywords:
+            result.append({"name": name, "keywords": keywords})
+    return result
+
+
+def fetch_custom_category_videos(
+    config: Config,
+    keywords: str,
+    youtube: Any = None,
+) -> list[dict[str, Any]]:
+    """Fetch videos by keyword search, then retrieve full details.
+
+    Uses search.list to find video IDs, then videos.list for full data.
+    Returns raw API video items, or an empty list on failure.
+    Raises QuotaExceededError if the API quota is exhausted.
+
+    Args:
+        config: Application configuration.
+        keywords: Pipe-separated keywords, e.g. "AI|ChatGPT|LLM".
+        youtube: Optional pre-built YouTube API client.
+    """
+    if youtube is None:
+        youtube = _build_youtube(config.youtube_api_key)
+
+    # Search for videos matching keywords
+    query = " OR ".join(kw.strip() for kw in keywords.split("|") if kw.strip())
+    search_response = _retry_call(
+        lambda: youtube.search().list(
+            q=query,
+            type="video",
+            order="viewCount",
+            regionCode=config.region_code,
+            publishedAfter=_recent_date_iso(),
+            part="id",
+            maxResults=config.max_results_per_category,
+        ).execute()
+    )
+
+    if search_response is None:
+        return []
+
+    video_ids = [
+        item["id"]["videoId"]
+        for item in search_response.get("items", [])
+        if item.get("id", {}).get("videoId")
+    ]
+
+    if not video_ids:
+        return []
+
+    # Fetch full video details in batches of 50
+    all_items: list[dict[str, Any]] = []
+    for i in range(0, len(video_ids), 50):
+        batch = video_ids[i:i + 50]
+        detail_response = _retry_call(
+            lambda batch=batch: youtube.videos().list(
+                id=",".join(batch),
+                part="snippet,statistics,contentDetails",
+            ).execute()
+        )
+        if detail_response:
+            all_items.extend(detail_response.get("items", []))
+
+    logger.info("Fetched %d videos for custom keywords: %s", len(all_items), query)
+    return all_items
+
+
+def _recent_date_iso() -> str:
+    """Return ISO 8601 datetime for 14 days ago (search time window)."""
+    from datetime import timedelta
+    dt = datetime.now(timezone.utc) - timedelta(days=14)
+    return dt.strftime("%Y-%m-%dT00:00:00Z")

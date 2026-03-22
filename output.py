@@ -28,6 +28,8 @@ CATEGORY_ZH: dict[str, str] = {
     "Education": "教育",
     "Science & Technology": "科学和技术",
     "Nonprofits & Activism": "非营利和行动主义",
+    "AI": "人工智能",
+    "LLM": "大模型",
 }
 
 FIELD_ORDER = [
@@ -61,6 +63,7 @@ def write_markdown(
     records: list[dict[str, Any]],
     filepath: str | Path,
     display_timezone: str = "UTC",
+    priority_categories: list[str] | None = None,
 ) -> None:
     """Write a Markdown report grouped by category with formatted tables.
 
@@ -68,6 +71,7 @@ def write_markdown(
         records: List of record dicts.
         filepath: Destination file path.
         display_timezone: Timezone name for display (informational).
+        priority_categories: Category names to display first, in order.
     """
     filepath = Path(filepath)
     filepath.parent.mkdir(parents=True, exist_ok=True)
@@ -85,7 +89,12 @@ def write_markdown(
     lines.append(f"**时区:** {display_timezone}")
     lines.append("")
 
-    for category_name in sorted(groups.keys()):
+    # Order: priority categories first (in order), then rest sorted alphabetically
+    priority = priority_categories or []
+    ordered = [c for c in priority if c in groups]
+    ordered += sorted(c for c in groups if c not in priority)
+
+    for category_name in ordered:
         cat_records = groups[category_name]
         # Sort by view_count descending, None last
         cat_records.sort(key=lambda r: (r.get("view_count") is None, -(r.get("view_count") or 0)))
