@@ -151,13 +151,12 @@ def main() -> None:
     # 9. Clean old files
     clean_old_files(config.output_dir, config.retention_days)
 
-    # 10. Health check: core categories
-    core_ids = {"10", "20", "24"}
-    found_core = {r["category_id"] for r in all_records if r["category_id"] in core_ids}
-    missing_core = core_ids - found_core
-    if missing_core:
-        logger.warning("Health check: missing data for core categories: %s", missing_core)
-        errors.append(f"Missing core categories: {missing_core}")
+    # 10. Health check: verify custom categories have data
+    for ccat in custom_cats:
+        cat_id = f"custom_{ccat['name']}"
+        if not any(r["category_id"] == cat_id for r in all_records):
+            logger.warning("Health check: no data for custom category: %s", ccat["name"])
+            errors.append(f"No data for custom category: {ccat['name']}")
 
     # 11. Notify
     category_counts = {}
