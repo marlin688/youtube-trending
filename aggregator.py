@@ -111,42 +111,46 @@ def filter_records(
     records: list[dict[str, Any]],
     min_duration_seconds: int = 0,
     max_video_age_days: int = 0,
-    custom_category_prefixes: list[str] | None = None,
+    min_view_count: int = 0,
 ) -> list[dict[str, Any]]:
-    """Filter records by minimum duration and maximum age.
+    """Filter records by duration, age, and minimum views.
 
-    Duration filter applies to all records.
-    Age filter only applies to custom categories (category_id starting with "custom_"),
-    trending categories are not filtered by age.
+    Duration and view count filters apply to all records.
+    Age filter only applies to custom categories (category_id starting with "custom_").
 
     Args:
         records: List of record dicts.
         min_duration_seconds: Exclude videos shorter than this (0 = no filter).
         max_video_age_days: Exclude videos published more than N days ago (0 = no filter).
-            Only applied to custom categories.
-        custom_category_prefixes: List of custom category_id prefixes for age filtering.
+        min_view_count: Exclude videos with fewer views (0 = no filter).
     """
     result: list[dict[str, Any]] = []
     now = datetime.now(timezone.utc)
-    is_custom_prefix = "custom_"
 
     for rec in records:
-        # Filter by duration (all categories)
+        # Filter by duration
         if min_duration_seconds > 0:
             dur = rec.get("duration_seconds")
             if dur is not None and dur < min_duration_seconds:
                 continue
 
-        # Filter by age (custom categories only)
-        if max_video_age_days > 0:
-            cat_id = rec.get("category_id", "")
-            if str(cat_id).startswith(is_custom_prefix):
+        # Filter by minimum view count
+        if min_view_count > 0:
+            views = rec.get("view_count")
+            if views is not None and views < min_view_count:
+                continue
+
+        # Filter by age (custom categories only, respects per-record _max_age_days)
+        cat_id = str(rec.get("category_id", ""))
+        if cat_id.startswith("custom_"):
+            rec_max_age = rec.get("_max_age_days", max_video_age_days)
+            if rec_max_age > 0:
                 pub = rec.get("published_at", "")
                 if pub:
                     try:
                         dt = datetime.fromisoformat(pub.replace("Z", "+00:00"))
                         age_days = (now - dt).total_seconds() / 86400
-                        if age_days > max_video_age_days:
+                        if age_days > rec_max_age:
                             continue
                     except (ValueError, TypeError):
                         pass
@@ -155,6 +159,6 @@ def filter_records(
 
     filtered = len(records) - len(result)
     if filtered:
-        logger.info("Filtered out %d records (min_duration=%ds, custom_max_age=%dd)",
-                     filtered, min_duration_seconds, max_video_age_days)
+        logger.info("Filtered out %d records (min_duration=%ds, max_age=%dd, min_views=%d)",
+                     filtered, min_duration_seconds, max_video_age_days, min_view_count)
     return result

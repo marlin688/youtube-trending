@@ -28,7 +28,8 @@ class Config:
     telegram_chat_id: str = ""
     custom_categories: str = "LLM:LLM|GPT|Claude|Gemini|Llama|大模型|大语言模型|ChatGPT|OpenAI;AI:artificial intelligence|AI|ChatGPT|LLM|机器学习|AI发展|AI趋势|AGI|AI安全|AI监管|人工智能发展|人工智能未来|AI revolution|future of AI|AI regulation"
     min_duration_seconds: int = 181
-    max_video_age_days: int = 3
+    max_video_age_days: int = 7
+    min_view_count: int = 1000
 
     def __post_init__(self) -> None:
         if not self.youtube_api_key:
@@ -64,5 +65,6 @@ def load_config(env_path: str | None = None) -> Config:
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
         custom_categories=os.getenv("CUSTOM_CATEGORIES", "LLM:LLM|GPT|Claude|Gemini|Llama|大模型|大语言模型|ChatGPT|OpenAI;AI:artificial intelligence|AI|ChatGPT|LLM|机器学习|AI发展|AI趋势|AGI|AI安全|AI监管|人工智能发展|人工智能未来|AI revolution|future of AI|AI regulation"),
         min_duration_seconds=int(os.getenv("MIN_DURATION_SECONDS", "181")),
-        max_video_age_days=int(os.getenv("MAX_VIDEO_AGE_DAYS", "3")),
+        max_video_age_days=int(os.getenv("MAX_VIDEO_AGE_DAYS", "7")),
+        min_view_count=int(os.getenv("MIN_VIEW_COUNT", "1000")),
     )

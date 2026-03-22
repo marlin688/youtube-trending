@@ -178,11 +178,13 @@ def fetch_trending_videos(
     return items
 
 
-def parse_custom_categories(raw: str) -> list[dict[str, str]]:
+def parse_custom_categories(raw: str) -> list[dict[str, Any]]:
     """Parse CUSTOM_CATEGORIES config string into structured list.
 
     Format: "Name1:kw1|kw2|kw3;Name2:kw4|kw5"
-    Returns: [{"name": "Name1", "keywords": "kw1|kw2|kw3"}, ...]
+    Append @days,order to override search params, e.g. "AI Course:kw1|kw2@90,relevance"
+
+    Returns: [{"name": "Name1", "keywords": "kw1|kw2", "search_days": 7, "order": "viewCount"}, ...]
     """
     if not raw.strip():
         return []
@@ -191,10 +193,30 @@ def parse_custom_categories(raw: str) -> list[dict[str, str]]:
         entry = entry.strip()
         if ":" not in entry:
             continue
-        name, keywords = entry.split(":", 1)
-        name, keywords = name.strip(), keywords.strip()
+        name, rest = entry.split(":", 1)
+        name = name.strip()
+
+        # Parse optional @days,order suffix
+        search_days = 7
+        order = "viewCount"
+        if "@" in rest:
+            keywords_part, params = rest.rsplit("@", 1)
+            parts = params.split(",")
+            if parts[0].strip().isdigit():
+                search_days = int(parts[0].strip())
+            if len(parts) > 1 and parts[1].strip():
+                order = parts[1].strip()
+        else:
+            keywords_part = rest
+
+        keywords = keywords_part.strip()
         if name and keywords:
-            result.append({"name": name, "keywords": keywords})
+            result.append({
+                "name": name,
+                "keywords": keywords,
+                "search_days": search_days,
+                "order": order,
+            })
     return result
 
 
@@ -202,6 +224,8 @@ def fetch_custom_category_videos(
     config: Config,
     keywords: str,
     youtube: Any = None,
+    search_days: int = 7,
+    order: str = "viewCount",
 ) -> list[dict[str, Any]]:
     """Fetch videos by keyword search, then retrieve full details.
 
@@ -213,6 +237,8 @@ def fetch_custom_category_videos(
         config: Application configuration.
         keywords: Pipe-separated keywords, e.g. "AI|ChatGPT|LLM".
         youtube: Optional pre-built YouTube API client.
+        search_days: How many days back to search.
+        order: Search result ordering ("viewCount" or "relevance").
     """
     if youtube is None:
         youtube = _build_youtube(config.youtube_api_key)
@@ -223,9 +249,9 @@ def fetch_custom_category_videos(
         lambda: youtube.search().list(
             q=query,
             type="video",
-            order="viewCount",
-            regionCode=config.region_code,
-            publishedAfter=_recent_date_iso(7),
+            order=order,
+            relevanceLanguage="en",
+            publishedAfter=_recent_date_iso(search_days),
             part="id",
             maxResults=config.max_results_per_category,
         ).execute()

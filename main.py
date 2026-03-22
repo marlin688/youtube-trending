@@ -60,12 +60,17 @@ def main() -> None:
     logger.info("Available categories: %s", ", ".join(f"{c['id']}={c['title']}" for c in categories))
 
     # 4. Determine target categories
+    custom_cats = parse_custom_categories(config.custom_categories)
     if config.categories:
         wanted = {cid.strip() for cid in config.categories.split(",") if cid.strip()}
         target = [c for c in categories if c["id"] in wanted]
         if not target:
             logger.warning("None of the configured categories %s are assignable", wanted)
-            target = categories
+            target = []
+    elif custom_cats:
+        # If custom categories are defined and no standard categories specified, skip standard
+        target = []
+        logger.info("Using custom categories only, skipping standard trending")
     else:
         target = categories
 
@@ -96,7 +101,6 @@ def main() -> None:
         all_records.extend(records)
 
     # 5b. Fetch custom categories (keyword-based search)
-    custom_cats = parse_custom_categories(config.custom_categories)
     for ccat in custom_cats:
         if quota_hit:
             skipped_categories.append(ccat["name"])
@@ -104,7 +108,11 @@ def main() -> None:
 
         logger.info("Fetching custom category: %s", ccat["name"])
         try:
-            items = fetch_custom_category_videos(config, ccat["keywords"])
+            items = fetch_custom_category_videos(
+                config, ccat["keywords"],
+                search_days=ccat.get("search_days", 7),
+                order=ccat.get("order", "viewCount"),
+            )
         except QuotaExceededError:
             logger.error("Quota exceeded at custom category %s, stopping", ccat["name"])
             errors.append(f"Quota exceeded at custom category {ccat['name']}")
@@ -118,6 +126,10 @@ def main() -> None:
             continue
 
         records = aggregate(items, f"custom_{ccat['name']}", ccat["name"], config.region_code)
+        # Store per-category max age for filtering
+        cat_max_age = ccat.get("search_days", config.max_video_age_days)
+        for rec in records:
+            rec["_max_age_days"] = cat_max_age
         all_records.extend(records)
 
     # Deduplicate across categories
@@ -129,6 +141,7 @@ def main() -> None:
         all_records,
         min_duration_seconds=config.min_duration_seconds,
         max_video_age_days=config.max_video_age_days,
+        min_view_count=config.min_view_count,
     )
     logger.info("Total records after filtering: %d", len(all_records))
 

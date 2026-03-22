@@ -30,6 +30,9 @@ CATEGORY_ZH: dict[str, str] = {
     "Nonprofits & Activism": "非营利和行动主义",
     "AI": "人工智能",
     "LLM": "大模型",
+    "AI News": "AI 资讯",
+    "Tech": "技术开发",
+    "AI Course": "AI 高校课程",
 }
 
 FIELD_ORDER = [
