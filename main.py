@@ -13,7 +13,7 @@ from fetcher import (
     fetch_categories, fetch_trending_videos, fetch_custom_category_videos,
     parse_custom_categories, QuotaExceededError,
 )
-from aggregator import aggregate, deduplicate
+from aggregator import aggregate, deduplicate, filter_records
 from output import write_csv, write_markdown, update_latest
 from cleaner import clean_old_files
 from notifier import send_summary
@@ -123,6 +123,14 @@ def main() -> None:
     # Deduplicate across categories
     all_records = deduplicate(all_records)
     logger.info("Total records after dedup: %d", len(all_records))
+
+    # 6b. Filter: remove Shorts and old videos
+    all_records = filter_records(
+        all_records,
+        min_duration_seconds=config.min_duration_seconds,
+        max_video_age_days=config.max_video_age_days,
+    )
+    logger.info("Total records after filtering: %d", len(all_records))
 
     # 7. Output CSV + Markdown
     snapshot_path = Path(config.output_dir) / "snapshots" / f"{date_str}.csv"

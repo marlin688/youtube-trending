@@ -225,7 +225,7 @@ def fetch_custom_category_videos(
             type="video",
             order="viewCount",
             regionCode=config.region_code,
-            publishedAfter=_recent_date_iso(),
+            publishedAfter=_recent_date_iso(config.max_video_age_days),
             part="id",
             maxResults=config.max_results_per_category,
         ).execute()
@@ -260,8 +260,8 @@ def fetch_custom_category_videos(
     return all_items
 
 
-def _recent_date_iso() -> str:
-    """Return ISO 8601 datetime for 14 days ago (search time window)."""
+def _recent_date_iso(days: int = 3) -> str:
+    """Return ISO 8601 datetime for N days ago (search time window)."""
     from datetime import timedelta
-    dt = datetime.now(timezone.utc) - timedelta(days=14)
+    dt = datetime.now(timezone.utc) - timedelta(days=days)
     return dt.strftime("%Y-%m-%dT00:00:00Z")
