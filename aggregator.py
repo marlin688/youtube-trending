@@ -111,41 +111,50 @@ def filter_records(
     records: list[dict[str, Any]],
     min_duration_seconds: int = 0,
     max_video_age_days: int = 0,
+    custom_category_prefixes: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Filter records by minimum duration and maximum age.
+
+    Duration filter applies to all records.
+    Age filter only applies to custom categories (category_id starting with "custom_"),
+    trending categories are not filtered by age.
 
     Args:
         records: List of record dicts.
         min_duration_seconds: Exclude videos shorter than this (0 = no filter).
-            Set to 61 to exclude Shorts.
         max_video_age_days: Exclude videos published more than N days ago (0 = no filter).
+            Only applied to custom categories.
+        custom_category_prefixes: List of custom category_id prefixes for age filtering.
     """
     result: list[dict[str, Any]] = []
     now = datetime.now(timezone.utc)
+    is_custom_prefix = "custom_"
 
     for rec in records:
-        # Filter shorts
+        # Filter by duration (all categories)
         if min_duration_seconds > 0:
             dur = rec.get("duration_seconds")
             if dur is not None and dur < min_duration_seconds:
                 continue
 
-        # Filter by age
+        # Filter by age (custom categories only)
         if max_video_age_days > 0:
-            pub = rec.get("published_at", "")
-            if pub:
-                try:
-                    dt = datetime.fromisoformat(pub.replace("Z", "+00:00"))
-                    age_days = (now - dt).total_seconds() / 86400
-                    if age_days > max_video_age_days:
-                        continue
-                except (ValueError, TypeError):
-                    pass
+            cat_id = rec.get("category_id", "")
+            if str(cat_id).startswith(is_custom_prefix):
+                pub = rec.get("published_at", "")
+                if pub:
+                    try:
+                        dt = datetime.fromisoformat(pub.replace("Z", "+00:00"))
+                        age_days = (now - dt).total_seconds() / 86400
+                        if age_days > max_video_age_days:
+                            continue
+                    except (ValueError, TypeError):
+                        pass
 
         result.append(rec)
 
     filtered = len(records) - len(result)
     if filtered:
-        logger.info("Filtered out %d records (min_duration=%ds, max_age=%dd)",
+        logger.info("Filtered out %d records (min_duration=%ds, custom_max_age=%dd)",
                      filtered, min_duration_seconds, max_video_age_days)
     return result

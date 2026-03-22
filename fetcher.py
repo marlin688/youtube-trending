@@ -225,7 +225,7 @@ def fetch_custom_category_videos(
             type="video",
             order="viewCount",
             regionCode=config.region_code,
-            publishedAfter=_recent_date_iso(config.max_video_age_days),
+            publishedAfter=_recent_date_iso(7),
             part="id",
             maxResults=config.max_results_per_category,
         ).execute()
