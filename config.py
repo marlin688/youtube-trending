@@ -26,7 +26,7 @@ class Config:
     display_timezone: str = "UTC"
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
-    custom_categories: str = "LLM:LLM|GPT|Claude|Gemini|Llama|大模型|大语言模型|ChatGPT|OpenAI;AI:artificial intelligence|AI|ChatGPT|LLM|机器学习"
+    custom_categories: str = "LLM:LLM|GPT|Claude|Gemini|Llama|大模型|大语言模型|ChatGPT|OpenAI;AI:artificial intelligence|AI|ChatGPT|LLM|机器学习|AI发展|AI趋势|AGI|AI安全|AI监管|人工智能发展|人工智能未来|AI revolution|future of AI|AI regulation"
 
     def __post_init__(self) -> None:
         if not self.youtube_api_key:
@@ -60,5 +60,5 @@ def load_config(env_path: str | None = None) -> Config:
         display_timezone=os.getenv("DISPLAY_TIMEZONE", "UTC"),
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
-        custom_categories=os.getenv("CUSTOM_CATEGORIES", "LLM:LLM|GPT|Claude|Gemini|Llama|大模型|大语言模型|ChatGPT|OpenAI;AI:artificial intelligence|AI|ChatGPT|LLM|机器学习"),
+        custom_categories=os.getenv("CUSTOM_CATEGORIES", "LLM:LLM|GPT|Claude|Gemini|Llama|大模型|大语言模型|ChatGPT|OpenAI;AI:artificial intelligence|AI|ChatGPT|LLM|机器学习|AI发展|AI趋势|AGI|AI安全|AI监管|人工智能发展|人工智能未来|AI revolution|future of AI|AI regulation"),
     )
