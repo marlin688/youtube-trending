@@ -11,7 +11,8 @@ from pathlib import Path
 from config import load_config
 from fetcher import (
     fetch_categories, fetch_trending_videos, fetch_custom_category_videos,
-    parse_custom_categories, QuotaExceededError,
+    parse_custom_categories, parse_monitor_channels, fetch_channel_latest_videos,
+    QuotaExceededError,
 )
 from aggregator import aggregate, deduplicate, filter_records
 from output import write_csv, write_markdown, update_latest
@@ -132,6 +133,36 @@ def main() -> None:
             rec["_max_age_days"] = cat_max_age
         all_records.extend(records)
 
+    # 5c. Fetch monitored channels (latest uploads regardless of keywords)
+    monitor_channels = parse_monitor_channels(config.monitor_channels)
+    if monitor_channels and not quota_hit:
+        logger.info("Monitoring %d channels", len(monitor_channels))
+        from fetcher import _build_youtube
+        shared_yt = _build_youtube(config.youtube_api_key)
+    for ch in monitor_channels:
+        if quota_hit:
+            skipped_categories.append(f"channel:{ch['name']}")
+            continue
+
+        try:
+            items = fetch_channel_latest_videos(
+                config, ch["channel_id"],
+                youtube=shared_yt,
+                max_results=5,
+                max_age_days=config.max_video_age_days,
+            )
+        except QuotaExceededError:
+            logger.error("Quota exceeded at channel %s, stopping", ch["name"])
+            errors.append(f"Quota exceeded at channel {ch['name']}")
+            quota_hit = True
+            continue
+
+        if not items:
+            continue
+
+        records = aggregate(items, "channel_monitor", "Channel Monitor", config.region_code)
+        all_records.extend(records)
+
     # Deduplicate across categories
     all_records = deduplicate(all_records)
     logger.info("Total records after dedup: %d", len(all_records))
@@ -149,8 +180,10 @@ def main() -> None:
     snapshot_path = Path(config.output_dir) / "snapshots" / f"{date_str}.csv"
     report_path = Path(config.output_dir) / "reports" / f"{date_str}.md"
 
-    # Custom categories come first in report, in their defined order
+    # Custom categories come first in report, then channel monitor
     priority_categories = [c["name"] for c in custom_cats]
+    if monitor_channels:
+        priority_categories.append("Channel Monitor")
 
     if all_records:
         write_csv(all_records, snapshot_path)

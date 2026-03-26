@@ -243,31 +243,50 @@ def fetch_custom_category_videos(
     if youtube is None:
         youtube = _build_youtube(config.youtube_api_key)
 
-    # Search for videos matching keywords
-    query = " OR ".join(kw.strip() for kw in keywords.split("|") if kw.strip())
-    search_response = _retry_call(
-        lambda: youtube.search().list(
-            q=query,
-            type="video",
-            order=order,
-            relevanceLanguage="en",
-            publishedAfter=_recent_date_iso(search_days),
-            part="id",
-            maxResults=config.max_results_per_category,
-        ).execute()
-    )
+    # Split keywords into chunks to stay under YouTube API query length limit
+    kw_list = [kw.strip() for kw in keywords.split("|") if kw.strip()]
+    max_query_len = 120
+    chunks: list[list[str]] = []
+    current_chunk: list[str] = []
+    current_len = 0
+    for kw in kw_list:
+        added_len = len(kw) + (len(" OR ") if current_chunk else 0)
+        if current_chunk and current_len + added_len > max_query_len:
+            chunks.append(current_chunk)
+            current_chunk = [kw]
+            current_len = len(kw)
+        else:
+            current_chunk.append(kw)
+            current_len += added_len
+    if current_chunk:
+        chunks.append(current_chunk)
 
-    if search_response is None:
-        return []
-
-    video_ids = [
-        item["id"]["videoId"]
-        for item in search_response.get("items", [])
-        if item.get("id", {}).get("videoId")
-    ]
+    # Search for videos matching keywords (multiple queries if needed)
+    video_ids: list[str] = []
+    for chunk in chunks:
+        query = " OR ".join(chunk)
+        search_response = _retry_call(
+            lambda query=query: youtube.search().list(
+                q=query,
+                type="video",
+                order=order,
+                relevanceLanguage="en",
+                publishedAfter=_recent_date_iso(search_days),
+                part="id",
+                maxResults=config.max_results_per_category,
+            ).execute()
+        )
+        if search_response:
+            video_ids.extend(
+                item["id"]["videoId"]
+                for item in search_response.get("items", [])
+                if item.get("id", {}).get("videoId")
+            )
 
     if not video_ids:
         return []
+    # Deduplicate while preserving order
+    video_ids = list(dict.fromkeys(video_ids))
 
     # Fetch full video details in batches of 50
     all_items: list[dict[str, Any]] = []
@@ -282,8 +301,152 @@ def fetch_custom_category_videos(
         if detail_response:
             all_items.extend(detail_response.get("items", []))
 
-    logger.info("Fetched %d videos for custom keywords: %s", len(all_items), query)
-    return all_items
+    # Title/tags relevance validation: keep only videos whose title or tags
+    # contain at least one search keyword (case-insensitive).
+    # For multi-word keywords like "Jensen Huang interview", we check if ALL
+    # individual words appear in the combined text (not necessarily adjacent).
+    # This filters false positives like Spanish "llama" (=call) or French "mistral".
+    validated_items = []
+    kw_lower = [kw.strip().lower() for kw in kw_list]
+    for item in all_items:
+        title = item.get("snippet", {}).get("title", "").lower()
+        tags = " ".join(t.lower() for t in item.get("snippet", {}).get("tags", []))
+        desc = item.get("snippet", {}).get("description", "").lower()[:500]
+        combined = f"{title} {tags} {desc}"
+        matched = False
+        for kw in kw_lower:
+            words = kw.split()
+            if len(words) <= 1:
+                # Single word/phrase: direct substring match
+                if kw in combined:
+                    matched = True
+                    break
+            else:
+                # Multi-word: all words must appear somewhere in text
+                if all(w in combined for w in words):
+                    matched = True
+                    break
+        if matched:
+            validated_items.append(item)
+
+    dropped = len(all_items) - len(validated_items)
+    full_query = " OR ".join(kw_list)
+    if dropped:
+        logger.info("Title relevance filter: dropped %d/%d videos", dropped, len(all_items))
+    if len(chunks) > 1:
+        logger.info("Fetched %d videos in %d query chunks for: %s", len(validated_items), len(chunks), full_query)
+    else:
+        logger.info("Fetched %d videos for custom keywords: %s", len(validated_items), full_query)
+    return validated_items
+
+
+def parse_monitor_channels(raw: str) -> list[dict[str, str]]:
+    """Parse MONITOR_CHANNELS config string into structured list.
+
+    Format: "Label1:channel_id1,Label2:channel_id2"
+    Channel IDs can be either UCxxxx channel IDs or @handle format.
+
+    Returns: [{"name": "Label1", "channel_id": "UCxxxx"}, ...]
+    """
+    if not raw.strip():
+        return []
+    result = []
+    for entry in raw.split(","):
+        entry = entry.strip()
+        if ":" not in entry:
+            continue
+        name, channel_id = entry.split(":", 1)
+        name = name.strip()
+        channel_id = channel_id.strip()
+        if name and channel_id:
+            result.append({"name": name, "channel_id": channel_id})
+    return result
+
+
+def fetch_channel_latest_videos(
+    config: Config,
+    channel_id: str,
+    youtube: Any = None,
+    max_results: int = 5,
+    max_age_days: int = 7,
+) -> list[dict[str, Any]]:
+    """Fetch latest videos from a specific channel.
+
+    Uses the channel's uploads playlist (UC -> UU) to get recent video IDs,
+    then fetches full details. Filters by max_age_days.
+
+    Returns raw API video items, or an empty list on failure.
+    Raises QuotaExceededError if the API quota is exhausted.
+    """
+    if youtube is None:
+        youtube = _build_youtube(config.youtube_api_key)
+
+    # If channel_id starts with @, resolve to UC channel ID first
+    if channel_id.startswith("@"):
+        resolve_response = _retry_call(
+            lambda: youtube.channels().list(
+                forHandle=channel_id,
+                part="id",
+            ).execute()
+        )
+        if not resolve_response or not resolve_response.get("items"):
+            logger.warning("Could not resolve handle %s to channel ID", channel_id)
+            return []
+        channel_id = resolve_response["items"][0]["id"]
+
+    # Convert channel ID to uploads playlist ID (UC -> UU)
+    if channel_id.startswith("UC"):
+        uploads_playlist = "UU" + channel_id[2:]
+    else:
+        logger.warning("Unexpected channel ID format: %s", channel_id)
+        return []
+
+    # Fetch latest items from uploads playlist
+    playlist_response = _retry_call(
+        lambda: youtube.playlistItems().list(
+            playlistId=uploads_playlist,
+            part="contentDetails",
+            maxResults=max_results,
+        ).execute()
+    )
+
+    if not playlist_response:
+        return []
+
+    # Extract video IDs and filter by publish date
+    from datetime import timedelta
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+    video_ids = []
+    for item in playlist_response.get("items", []):
+        pub_str = item.get("contentDetails", {}).get("videoPublishedAt", "")
+        if pub_str:
+            try:
+                pub_dt = datetime.fromisoformat(pub_str.replace("Z", "+00:00"))
+                if pub_dt < cutoff:
+                    continue
+            except (ValueError, TypeError):
+                pass
+        vid = item.get("contentDetails", {}).get("videoId")
+        if vid:
+            video_ids.append(vid)
+
+    if not video_ids:
+        return []
+
+    # Fetch full video details
+    detail_response = _retry_call(
+        lambda: youtube.videos().list(
+            id=",".join(video_ids),
+            part="snippet,statistics,contentDetails",
+        ).execute()
+    )
+
+    if not detail_response:
+        return []
+
+    items = detail_response.get("items", [])
+    logger.info("Fetched %d recent videos from channel %s", len(items), channel_id)
+    return items
 
 
 def _recent_date_iso(days: int = 3) -> str:

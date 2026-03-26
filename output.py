@@ -33,6 +33,8 @@ CATEGORY_ZH: dict[str, str] = {
     "AI News": "AI 资讯",
     "Tech": "技术开发",
     "AI Course": "AI 高校课程",
+    "KOL Interview": "KOL 访谈",
+    "Channel Monitor": "频道追踪",
 }
 
 FIELD_ORDER = [

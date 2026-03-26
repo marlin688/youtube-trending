@@ -30,6 +30,7 @@ class Config:
     min_duration_seconds: int = 181
     max_video_age_days: int = 7
     min_view_count: int = 1000
+    monitor_channels: str = ""
 
     def __post_init__(self) -> None:
         if not self.youtube_api_key:
@@ -67,4 +68,5 @@ def load_config(env_path: str | None = None) -> Config:
         min_duration_seconds=int(os.getenv("MIN_DURATION_SECONDS", "181")),
         max_video_age_days=int(os.getenv("MAX_VIDEO_AGE_DAYS", "7")),
         min_view_count=int(os.getenv("MIN_VIEW_COUNT", "1000")),
+        monitor_channels=os.getenv("MONITOR_CHANNELS", ""),
     )
