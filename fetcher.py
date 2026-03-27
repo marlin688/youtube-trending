@@ -363,90 +363,101 @@ def parse_monitor_channels(raw: str) -> list[dict[str, str]]:
     return result
 
 
-def fetch_channel_latest_videos(
+def fetch_monitored_channels(
     config: Config,
-    channel_id: str,
-    youtube: Any = None,
-    max_results: int = 5,
+    channels: list[dict[str, str]],
+    max_results_per_channel: int = 5,
     max_age_days: int = 7,
 ) -> list[dict[str, Any]]:
-    """Fetch latest videos from a specific channel.
+    """Fetch latest videos from multiple channels in batched API calls.
 
-    Uses the channel's uploads playlist (UC -> UU) to get recent video IDs,
-    then fetches full details. Filters by max_age_days.
+    Collects video IDs from each channel's uploads playlist, then fetches
+    all video details in a single batched call to minimize quota usage.
 
-    Returns raw API video items, or an empty list on failure.
+    Each channel costs 1 API call (playlistItems), plus 1 shared call per
+    50 videos (videos.list). Total: N_channels + ceil(total_videos / 50).
+
+    Returns raw API video items.
     Raises QuotaExceededError if the API quota is exhausted.
     """
-    if youtube is None:
-        youtube = _build_youtube(config.youtube_api_key)
+    from datetime import timedelta
 
-    # If channel_id starts with @, resolve to UC channel ID first
-    if channel_id.startswith("@"):
-        resolve_response = _retry_call(
-            lambda: youtube.channels().list(
-                forHandle=channel_id,
-                part="id",
+    youtube = _build_youtube(config.youtube_api_key)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+    all_video_ids: list[str] = []
+
+    for ch in channels:
+        channel_id = ch["channel_id"]
+
+        # Resolve @handle to UC channel ID
+        if channel_id.startswith("@"):
+            resolve_response = _retry_call(
+                lambda cid=channel_id: youtube.channels().list(
+                    forHandle=cid,
+                    part="id",
+                ).execute()
+            )
+            if not resolve_response or not resolve_response.get("items"):
+                logger.warning("Could not resolve handle %s", channel_id)
+                continue
+            channel_id = resolve_response["items"][0]["id"]
+
+        if not channel_id.startswith("UC"):
+            logger.warning("Unexpected channel ID format: %s (%s)", channel_id, ch["name"])
+            continue
+
+        uploads_playlist = "UU" + channel_id[2:]
+
+        playlist_response = _retry_call(
+            lambda pid=uploads_playlist: youtube.playlistItems().list(
+                playlistId=pid,
+                part="contentDetails",
+                maxResults=max_results_per_channel,
             ).execute()
         )
-        if not resolve_response or not resolve_response.get("items"):
-            logger.warning("Could not resolve handle %s to channel ID", channel_id)
-            return []
-        channel_id = resolve_response["items"][0]["id"]
 
-    # Convert channel ID to uploads playlist ID (UC -> UU)
-    if channel_id.startswith("UC"):
-        uploads_playlist = "UU" + channel_id[2:]
-    else:
-        logger.warning("Unexpected channel ID format: %s", channel_id)
+        if not playlist_response:
+            logger.warning("No playlist response for channel %s", ch["name"])
+            continue
+
+        count = 0
+        for item in playlist_response.get("items", []):
+            pub_str = item.get("contentDetails", {}).get("videoPublishedAt", "")
+            if pub_str:
+                try:
+                    pub_dt = datetime.fromisoformat(pub_str.replace("Z", "+00:00"))
+                    if pub_dt < cutoff:
+                        continue
+                except (ValueError, TypeError):
+                    pass
+            vid = item.get("contentDetails", {}).get("videoId")
+            if vid:
+                all_video_ids.append(vid)
+                count += 1
+        if count:
+            logger.info("Channel %s: %d recent videos", ch["name"], count)
+
+    if not all_video_ids:
         return []
 
-    # Fetch latest items from uploads playlist
-    playlist_response = _retry_call(
-        lambda: youtube.playlistItems().list(
-            playlistId=uploads_playlist,
-            part="contentDetails",
-            maxResults=max_results,
-        ).execute()
-    )
+    # Deduplicate
+    all_video_ids = list(dict.fromkeys(all_video_ids))
 
-    if not playlist_response:
-        return []
+    # Fetch full video details in batches of 50
+    all_items: list[dict[str, Any]] = []
+    for i in range(0, len(all_video_ids), 50):
+        batch = all_video_ids[i:i + 50]
+        detail_response = _retry_call(
+            lambda batch=batch: youtube.videos().list(
+                id=",".join(batch),
+                part="snippet,statistics,contentDetails",
+            ).execute()
+        )
+        if detail_response:
+            all_items.extend(detail_response.get("items", []))
 
-    # Extract video IDs and filter by publish date
-    from datetime import timedelta
-    cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
-    video_ids = []
-    for item in playlist_response.get("items", []):
-        pub_str = item.get("contentDetails", {}).get("videoPublishedAt", "")
-        if pub_str:
-            try:
-                pub_dt = datetime.fromisoformat(pub_str.replace("Z", "+00:00"))
-                if pub_dt < cutoff:
-                    continue
-            except (ValueError, TypeError):
-                pass
-        vid = item.get("contentDetails", {}).get("videoId")
-        if vid:
-            video_ids.append(vid)
-
-    if not video_ids:
-        return []
-
-    # Fetch full video details
-    detail_response = _retry_call(
-        lambda: youtube.videos().list(
-            id=",".join(video_ids),
-            part="snippet,statistics,contentDetails",
-        ).execute()
-    )
-
-    if not detail_response:
-        return []
-
-    items = detail_response.get("items", [])
-    logger.info("Fetched %d recent videos from channel %s", len(items), channel_id)
-    return items
+    logger.info("Channel monitor: fetched %d videos from %d channels", len(all_items), len(channels))
+    return all_items
 
 
 def _recent_date_iso(days: int = 3) -> str:
